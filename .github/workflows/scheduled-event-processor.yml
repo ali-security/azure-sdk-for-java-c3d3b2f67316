@@ -1,19 +1,8 @@
 name: GitHub Scheduled Event Processor
 
 on:
-  schedule:
-    # Close stale issues, runs every day at 1am - CloseStaleIssues
-    - cron: '0 1 * * *'
-    # Identify stale pull requests, every Friday at 5am - IdentifyStalePullRequests
-    - cron: '0 5 * * FRI'
-    # Close stale pull requests, every 6 hours at 02:30 AM, 08:30 AM, 02:30 PM and 08:30 PM - CloseStalePullRequests
-    - cron: '30 2,8,14,20 * * *'
-    # Identify stale issues, every 6 hours at 03:30 AM, 09:30 AM, 03:30 PM and 09:30 PM - IdentifyStaleIssues
-    - cron: '30 3,9,15,21 * * *'
-    # Close addressed issues, every 6 hours at 04:30 AM, 10:30 AM, 04:30 PM and 10:30 PM - CloseAddressedIssues
-    - cron: '30 4,10,16,22 * * *'
-    # Lock closed issues, every 6 hours at 05:30 AM, 11:30 AM, 05:30 PM and 11:30 PM - LockClosedIssues
-    - cron: '30 5,11,17,23 * * *'
+  workflow_dispatch:
+
 # This removes all unnecessary permissions, the ones needed will be set below.
 # https://docs.github.com/en/actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
 permissions: {}
@@ -25,6 +14,7 @@ jobs:
       pull-requests: write
     name: Handle ${{ github.event.schedule }} ${{ github.event.action }} event
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # To run github-event-processor built from source, for testing purposes, uncomment everything
       # in between the Start/End-Build From Source comments and comment everything in between the

@@ -1,0 +1,120 @@
+name: seal-build
+
+# Sealed build of com.azure:azure-identity. Upstream builds and tests this module
+# only on Azure Pipelines (sdk/identity/ci.yml -> archetype-sdk-client.yml with
+# eng/pipelines/templates/stages/platform-matrix.json); the repo's own GitHub
+# workflows are issue/PR bots. This workflow mirrors that platform matrix:
+# ubuntu/windows/macos x Java 8/17, plus ubuntu Java 11 and 20. The release jar
+# is built on the ubuntu / Java 17 leg (reference MANIFEST: Build-Jdk-Spec 17).
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Surefire -Dtest selector; empty runs the full suite"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }} / Java ${{ matrix.java }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        java: ["8", "17"]
+        include:
+          - os: ubuntu-latest
+            java: "11"
+          - os: ubuntu-latest
+            java: "20"
+    defaults:
+      run:
+        shell: bash
+    env:
+      MAVEN_VERSION: 3.9.5
+      MODULE_POM: sdk/identity/azure-identity/pom.xml
+      GATE_FLAGS: >-
+        -Dcheckstyle.skip=true -Dspotbugs.skip=true -Drevapi.skip=true
+        -Djacoco.skip=true -Dcodesnippet.skip=true -Dspotless.skip=true
+        -Denforcer.skip=true -Dmaven.javadoc.skip=true -Dgpg.skip=true
+        -DcreateSourcesJar=false -Dmaven.source.skip=true
+    steps:
+      # The monorepo has generated paths longer than Windows' 260-char limit;
+      # without this the checkout aborts with "Filename too long".
+      - name: Enable git long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: ${{ matrix.java }}
+
+      - name: Install Maven ${{ env.MAVEN_VERSION }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/maven.tar.gz" \
+            "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+          # extract from inside RUNNER_TEMP: GNU tar on Windows reads "D:" as a remote host
+          (cd "$RUNNER_TEMP" && tar -xzf maven.tar.gz)
+          echo "$RUNNER_TEMP/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: |
+          java -version
+          mvn -v
+
+      - name: Build and test
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            TEST_ARGS="-Dtest=${{ inputs.test-filter }} -Dsurefire.failIfNoSpecifiedTests=false"
+          else
+            TEST_ARGS=""
+          fi
+          mvn -B -ntp -f "$MODULE_POM" clean package $GATE_FLAGS \
+            -DparallelizeTests=false $TEST_ARGS \
+            -Daether.connector.http.retryHandler.count=10 \
+            -Daether.connector.http.retryHandler.interval=10000 \
+            -Daether.connector.http.retryHandler.serviceUnavailable=429,503
+
+      - name: Per-class results and skipped tests
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=(sdk/identity/azure-identity/target/surefire-reports/TEST-*.xml)
+          if [ ${#files[@]} -eq 0 ]; then echo "no surefire reports"; exit 0; fi
+          total=0; fail=0; err=0; skip=0
+          for f in "${files[@]}"; do
+            line=$(grep -m1 -o '<testsuite [^>]*' "$f")
+            name=$(echo "$line" | sed -n 's/.* name="\([^"]*\)".*/\1/p')
+            t=$(echo "$line" | sed -n 's/.* tests="\([0-9]*\)".*/\1/p')
+            fl=$(echo "$line" | sed -n 's/.* failures="\([0-9]*\)".*/\1/p')
+            er=$(echo "$line" | sed -n 's/.* errors="\([0-9]*\)".*/\1/p')
+            sk=$(echo "$line" | sed -n 's/.* skipped="\([0-9]*\)".*/\1/p')
+            echo "SUITE $name tests=$t failures=$fl errors=$er skipped=$sk"
+            total=$((total+t)); fail=$((fail+fl)); err=$((err+er)); skip=$((skip+sk))
+          done
+          echo "SKIPPED TESTS (name / class / reason):"
+          for f in "${files[@]}"; do
+            awk '
+              /<testcase /{ n=$0; sub(/.*name="/,"",n); sub(/".*/,"",n); c=$0; sub(/.*classname="/,"",c); sub(/".*/,"",c) }
+              /<skipped/{ m=$0; if (m ~ /message="/) { sub(/.*message="/,"",m); sub(/".*/,"",m) } else { m="(no message: @Disabled / assumption without text)" }
+                          print "  SKIPPED " c "#" n " -- " m }
+            ' "$f"
+          done
+          echo "TOTAL tests=$total failures=$fail errors=$err skipped=$skip passed=$((total-fail-err-skip))"
+
+      - name: Upload jar
+        if: matrix.os == 'ubuntu-latest' && matrix.java == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: azure-identity-jar
+          path: sdk/identity/azure-identity/target/azure-identity-1.10.4.jar
+          if-no-files-found: error

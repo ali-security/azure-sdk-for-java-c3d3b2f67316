@@ -1,16 +1,7 @@
 name: GitHub Event Processor
 
 on:
-  issues:
-    types: [edited, labeled, opened, reopened, unlabeled]
-  # issue_comment is used for both issues and pull_requests
-  # github.event.issue.pull_request will be non-null on pull request comments
-  issue_comment:
-    types: [created]
-  # synchronize is the pull_request_target event when changes are pushed
-  # pull request merged is the closed event with github.event.pull_request.merged = true
-  pull_request_target:
-    types: [closed, labeled, opened, reopened, review_requested, synchronize, unlabeled]
+  workflow_dispatch:
 
 # This removes all unnecessary permissions, the ones needed will be set below.
 # https://docs.github.com/en/actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
@@ -26,6 +17,7 @@ jobs:
       contents: read
     name: Handle ${{ github.event_name }} ${{ github.event.action }} event
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: 'Az CLI login'
         if: ${{ github.event_name == 'issues' && github.event.action == 'opened' }}
