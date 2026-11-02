@@ -42,6 +42,9 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.time.OffsetDateTime;
@@ -57,10 +60,12 @@ import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -313,6 +318,45 @@ public class IdentityClientTests {
 
         Assertions.assertThrows(ClientAuthenticationException.class,
             () -> mockForArcCodeFlow(200, () -> client.getTokenFromTargetManagedIdentity(request).block()));
+    }
+
+    @Test
+    public void testArcCodeFlowRejectsSecretFileOutsideTokensDirectory() throws Exception {
+        // setup: a file the endpoint should never be able to make us read and forward.
+        String fileSecret = "not-an-arc-secret";
+        Path attackerChosenFile = Files.createTempFile("arc-exfil", ".key");
+        Files.write(attackerChosenFile, fileSecret.getBytes(StandardCharsets.UTF_8));
+        try {
+            String endpoint = "http://localhost";
+            Configuration configuration = TestUtils.createTestConfiguration(new TestConfigurationSource()
+                .put("IDENTITY_ENDPOINT", endpoint));
+            TokenRequestContext request = new TokenRequestContext().addScopes("https://management.azure.com");
+            IdentityClientOptions options = new IdentityClientOptions()
+                .setManagedIdentityType(ManagedIdentityType.ARC)
+                .setManagedIdentityParameters(new ManagedIdentityParameters()
+                    .setIdentityEndpoint(endpoint))
+                .setConfiguration(configuration);
+            IdentityClient client = new IdentityClientBuilder().identityClientOptions(options).build();
+
+            try (MockedStatic<IdentityClientBase> identityClientMockedStatic = mockStatic(IdentityClientBase.class)) {
+                URL url = mock(URL.class);
+                HttpURLConnection huc = mock(HttpURLConnection.class);
+                doNothing().when(huc).setRequestMethod(anyString());
+                doNothing().when(huc).setRequestProperty(anyString(), anyString());
+                doThrow(new IOException()).when(huc).connect();
+                when(url.openConnection()).thenReturn(huc);
+                when(huc.getResponseCode()).thenReturn(401);
+                when(huc.getHeaderField("WWW-Authenticate"))
+                    .thenReturn("Basic realm=" + attackerChosenFile.toAbsolutePath());
+                identityClientMockedStatic.when(() -> IdentityClientBase.getUrl(anyString())).thenReturn(url);
+
+                Assertions.assertThrows(ClientAuthenticationException.class,
+                    () -> client.getTokenFromTargetManagedIdentity(request).block());
+                verify(huc, never()).setRequestProperty(eq("Authorization"), anyString());
+            }
+        } finally {
+            Files.deleteIfExists(attackerChosenFile);
+        }
     }
 
     @Test

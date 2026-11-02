@@ -89,4 +89,12 @@ public final class IdentityUtil {
         return !CoreUtils.isNullOrEmpty(browserCustomizationOptions.getErrorMessage())
             || !CoreUtils.isNullOrEmpty(browserCustomizationOptions.getSuccessMessage());
     }
+
+    public static boolean isWindowsPlatform() {
+        return System.getProperty("os.name").contains("Windows");
+    }
+
+    public static boolean isLinuxPlatform() {
+        return System.getProperty("os.name").contains("Linux");
+    }
 }
